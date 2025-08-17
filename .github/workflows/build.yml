@@ -46,7 +46,7 @@ jobs:
       - name: Upload Release DLL
         uses: actions/upload-artifact@v4
         with:
-          name: MySql.Data-Release-DLL
+          name: MySql.Data-Release-9.0-DLL
           path: |
             **/bin/Release/**/*.dll
 
