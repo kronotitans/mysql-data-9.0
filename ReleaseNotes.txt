@@ -1,0 +1,73 @@
+MySql.Data 8.0.28 Release Notes
+================================
+
+Release Date: July 23, 2025
+
+## What's New in Version 8.0.28
+
+### Features
+- Enhanced SSL/TLS certificate validation with comprehensive PEM support
+- Improved authentication plugins including SCRAM-SHA-1 and SCRAM-SHA-256
+- Support for WebAuthn and OCI authentication methods
+- Enhanced failover and replication capabilities
+- Comprehensive connection pooling optimizations
+
+### Framework Support
+- .NET 8.0 primary target framework
+- Cross-platform compatibility (Windows, Linux, macOS)
+- Support for .NET Framework 4.6.2+ on Windows
+
+### Dependencies
+- BouncyCastle.Cryptography 2.2.1 (for SSL/cryptographic operations)
+- Google.Protobuf 3.14.0 (for MySQL X Protocol support)
+- System.Text.Json 7.0.1 (for JSON data handling)
+- K4os.Compression.LZ4.Streams 1.2.6 (for compression support)
+- ZstdSharp.Port 0.7.1 (for Zstandard compression)
+
+### Security & Authentication
+- Enhanced SSL certificate validation
+- Support for multiple authentication plugins
+- Improved connection security features
+- Certificate-based authentication support
+
+### Performance Improvements
+- Optimized connection pooling
+- Enhanced query performance
+- Improved memory management
+- Better resource utilization
+
+### Bug Fixes
+- Resolved SSL certificate validation issues
+- Fixed connection timeout handling
+- Improved error handling and logging
+- Enhanced compatibility with various MySQL server versions
+
+## Installation
+
+### NuGet Package Manager
+```
+Install-Package MySql.Data -Version 8.0.28
+```
+
+### .NET CLI
+```
+dotnet add package MySql.Data --version 8.0.28
+```
+
+### PackageReference
+```xml
+<PackageReference Include="MySql.Data" Version="8.0.28" />
+```
+
+## Requirements
+- .NET 8.0 or later
+- MySQL Server 5.7 or later (recommended: MySQL 8.0+)
+
+## License
+GPL-2.0-only WITH Universal-FOSS-exception-1.0
+
+## Support
+For documentation and support, visit: https://dev.mysql.com/downloads/
+
+## Copyright
+Copyright © 2016, 2025, Oracle and/or its affiliates.

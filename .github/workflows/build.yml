@@ -1,0 +1,60 @@
+name: Build DLL
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore and Build (Release)
+        run: |
+          dotnet restore MySql.Data.csproj
+          dotnet clean MySql.Data.csproj
+          dotnet build MySql.Data.csproj \
+            --configuration Release \
+            --no-restore \
+            -p:PathMap="${GITHUB_WORKSPACE}=./" \
+            -p:EmbedAllSources=false \
+            -p:DebugType=none \
+            -p:DebugSymbols=false \
+            -p:ContinuousIntegrationBuild=true \
+            -p:Deterministic=true \
+            -p:PublishRepositoryUrl=false \
+            -p:EmbedUntrackedSources=false
+
+      - name: Create NuGet Package
+        run: |
+          dotnet pack MySql.Data.csproj \
+            --configuration Release \
+            --no-build \
+            -p:PackageVersion=9.0.0-arkane \
+            -p:PackageId=MySql.Data.Arkane \
+            --output ./nupkg
+
+      - name: Upload Release DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: MySql.Data-Release-DLL
+          path: |
+            **/bin/Release/**/*.dll
+
+      - name: Upload NuGet Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: MySql.Data-Release-NuGet
+          path: |
+            **/nupkg/*.nupkg
+            **/nupkg/*.snupkg
+        if: success() || failure()

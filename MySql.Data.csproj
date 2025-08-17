@@ -1,0 +1,151 @@
+<Project>
+  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.props" />
+
+  <PropertyGroup>
+    <Description>MySql.Data.MySqlClient .Net Core Class Library</Description>
+    <Copyright>Copyright © 2016, 2024, Oracle and/or its affiliates.</Copyright>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <Version>9.0.0</Version>
+    <Authors>Oracle</Authors>
+    <DeveloperEmail>developer@mysql.com</DeveloperEmail>
+    <AssemblyName>MySql.Data</AssemblyName>
+    <TargetFrameworks>net8.0</TargetFrameworks>
+    <PackageId>MySql.Data</PackageId>
+    <PackageTags>MySql;.NET Connector;MySql Connector/NET;netcore;.Net Core;MySql Conector/Net Core;coreclr;C/NET;C/Net Core</PackageTags>
+    <PackageReleaseNotes>MySql.Data 9.0.0 - Enhanced SSL certificate validation, improved authentication plugins, cross-platform .NET 8.0 support, and performance optimizations. See ReleaseNotes.txt for complete details.</PackageReleaseNotes>
+    <!-- <PackageIcon>Nuget/Images/logo-mysql-170x115.png</PackageIcon> -->
+    <!-- <PackageReadmeFile>Nuget/Readme/MySQL.Data/README.md</PackageReadmeFile> -->
+    <PackageProjectUrl>https://dev.mysql.com/downloads/</PackageProjectUrl>
+    <PackageLicenseExpression>GPL-2.0-only WITH Universal-FOSS-exception-1.0</PackageLicenseExpression>
+    <PackageRequireLicenseAcceptance>true</PackageRequireLicenseAcceptance>
+    <GenerateAssemblyTitleAttribute>false</GenerateAssemblyTitleAttribute>
+    <GenerateAssemblyDescriptionAttribute>false</GenerateAssemblyDescriptionAttribute>
+    <GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>
+    <GenerateAssemblyCompanyAttribute>false</GenerateAssemblyCompanyAttribute>
+    <GenerateAssemblyProductAttribute>false</GenerateAssemblyProductAttribute>
+    <GenerateAssemblyCopyrightAttribute>false</GenerateAssemblyCopyrightAttribute>
+    <GenerateAssemblyVersionAttribute>false</GenerateAssemblyVersionAttribute>
+    <GenerateAssemblyFileVersionAttribute>false</GenerateAssemblyFileVersionAttribute>
+    <GenerateAssemblyInformationalVersionAttribute>false</GenerateAssemblyInformationalVersionAttribute>
+    <GenerateNeutralResourcesLanguageAttribute>false</GenerateNeutralResourcesLanguageAttribute>
+    <SignAssembly>false</SignAssembly>
+    <DelaySign>false</DelaySign>
+    <!-- <AssemblyOriginatorKeyFile>..\..\ConnectorNetPublicKey.snk</AssemblyOriginatorKeyFile> -->
+    <NoWarn>CS1591,CS1587,CS1574,CS1570,SYSLIB0003,CA1416,CS8981,CS0659,CS0618,CS0114,CS8632,CS0414,CS0419,CA2200,SYSLIB0039,SYSLIB0051</NoWarn>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PathMap>$(MSBuildProjectDirectory)=.</PathMap>
+    <Deterministic>true</Deterministic>
+    <PublishRepositoryUrl>false</PublishRepositoryUrl>
+    <EmbedUntrackedSources>false</EmbedUntrackedSources>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <DebugType>portable</DebugType>
+    <EmbedAllSources>false</EmbedAllSources>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(allow_prerelease)'=='true'">
+    <TargetFrameworks>net9.1;$(TargetFrameworks)</TargetFrameworks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <TargetFrameworks>net462;net48;$(TargetFrameworks)</TargetFrameworks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Package files removed - not available in this repository -->
+    <!-- <None Include="Nuget/Images/logo-mysql-170x115.png" Pack="true" PackagePath="Nuget/Images/" /> -->
+    <!-- <None Include="Nuget/Readme/MySQL.Data/README.md" Pack="true" PackagePath="Nuget/Readme/MySQL.Data/" /> -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Removed these broken lines that referenced outside project -->
+    <!-- <None Include="..\..\README" Pack="true" PackagePath="\" /> -->
+    <!-- <None Include="..\..\LICENSE" Pack="true" PackagePath="\" /> -->
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Properties\ReservedWords.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.3.1" />
+    <PackageReference Include="Google.Protobuf" Version="3.26.1" />
+    <PackageReference Include="K4os.Compression.LZ4.Streams" Version="1.3.8" />
+    <PackageReference Include="System.Buffers" Version="4.5.1" />
+    <PackageReference Include="System.Threading.Tasks.Extensions" Version="4.5.4" />
+    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.0.0" />
+    <PackageReference Include="ZstdSharp.Port" Version="0.8.0" />
+    <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="8.0.1" />
+    <PackageReference Include="System.Configuration.ConfigurationManager" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)'=='net462' or '$(TargetFramework)'=='net48'">
+    <Reference Include="System" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Transactions" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Management" />
+    <EmbeddedResource Include="Resources.resx;ResourcesX.resx;Properties\ReservedWords.txt" Exclude="bin\**;obj\**;**\*.xproj;packages\**;@(EmbeddedResource)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)'=='netstandard2.0' or '$(TargetFramework)'=='netstandard2.1' or '$(TargetFramework)'=='net6.0' or '$(TargetFramework)'=='net7.0' or '$(TargetFramework)'=='net8.0' or '$(TargetFramework)'=='net9.1'">
+    <Compile Remove="Framework/net462/*" />
+    <PackageReference Include="System.Security.Permissions" Version="8.0.0" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+    <PackageReference Include="System.Runtime.Loader" Version="4.3.0" />
+    <PackageReference Include="System.Text.Json" Version="8.0.4" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <!-- Windows-only Kerberos/GSSAPI libraries - not needed on Linux -->
+    <Content Include="..\..\Dependencies\MITLibs\comerr64.dll" PackagePath="runtimes\win-x64\native" CopyToOutputDirectory="Always" />
+    <Content Include="..\..\Dependencies\MITLibs\gssapi64.dll" PackagePath="runtimes\win-x64\native" CopyToOutputDirectory="Always" />
+    <Content Include="..\..\Dependencies\MITLibs\k5sprt64.dll" PackagePath="runtimes\win-x64\native" CopyToOutputDirectory="Always" />
+    <Content Include="..\..\Dependencies\MITLibs\krb5_64.dll" PackagePath="runtimes\win-x64\native" CopyToOutputDirectory="Always" />
+    <Content Include="..\..\Dependencies\MITLibs\krbcc64.dll" PackagePath="runtimes\win-x64\native" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <DefineConstants>$(DefineConstants);DEBUG</DefineConstants>
+    <PreserveCompilationContext>true</PreserveCompilationContext>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <DefineConstants>$(DefineConstants);RELEASE</DefineConstants>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)' == 'Commercial' ">
+    <DefineConstants>$(DefineConstants);RELEASE;COMMERCIAL</DefineConstants>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Update="Resources.Designer.cs">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Resources.resx</DependentUpon>
+    </Compile>
+    <Compile Update="ResourcesX.Designer.cs">
+      <DesignTime>True</DesignTime>
+      <AutoGen>True</AutoGen>
+      <DependentUpon>ResourcesX.resx</DependentUpon>
+    </Compile>
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Update="Resources.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+    <EmbeddedResource Update="ResourcesX.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <LastGenOutput>ResourcesX.Designer.cs</LastGenOutput>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <Import Sdk="Microsoft.NET.Sdk" Project="Sdk.targets" />
+</Project>
