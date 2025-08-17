@@ -6,6 +6,8 @@
     <Copyright>Copyright © 2016, 2024, Oracle and/or its affiliates.</Copyright>
     <NeutralLanguage>en-US</NeutralLanguage>
     <Version>9.0.0</Version>
+    <AssemblyVersion>9.0.0</AssemblyVersion>
+    <FileVersion>9.0.0</FileVersion>
     <Authors>Oracle</Authors>
     <DeveloperEmail>developer@mysql.com</DeveloperEmail>
     <AssemblyName>MySql.Data</AssemblyName>
